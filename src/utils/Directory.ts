@@ -1,18 +1,20 @@
 import fs from 'fs';
+import path from 'path';
 
 class Directory {
-  async createDir (folder: string){
-    try{
-      fs.mkdirSync(folder);
-    }catch(err){
-      return console.log(err);
+  async ensureDir(folder: string) {
+    try {
+      fs.mkdirSync(folder, { recursive: true });
+      return true;
+    } catch (err) {
+      console.error("Erro ao criar diretório:", err);
+      return false;
     }
   }
 
-  async verifyDir(folder:string){
+  async verifyDir(folder: string) {
     return fs.existsSync(folder);
   }
-
 }
 
-export { Directory }
+export { Directory };
