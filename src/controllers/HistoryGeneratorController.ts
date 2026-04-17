@@ -1,4 +1,4 @@
-import { Request, Response} from "express"
+import { Request, Response } from "express"
 import { sendToQueue } from "../rabbitmq-server";
 import { HistoryGeneratorService } from "../services/HistoryGeneratorService";
 
@@ -8,14 +8,14 @@ class HistoryGeneratorController {
   *
   * @Param companyId, clientKey, dateFrom, dateTo
   *
-  * @return object
+  * @return object { jobId, totalContacts }
   */
   async handle(request: Request, response: Response) {
-    const {companyId, clientKey, dateFrom, dateTo} = request.body;
+    const { companyId, clientKey, dateFrom, dateTo } = request.body;
     const historyGeneratorService = new HistoryGeneratorService();
-    const historyGenerate = await historyGeneratorService.execute(companyId, clientKey, dateFrom, dateTo)
+    const result = await historyGeneratorService.execute(companyId, clientKey, dateFrom, dateTo)
 
-    return response.json();
+    return response.json(result);
   }
 
 }
