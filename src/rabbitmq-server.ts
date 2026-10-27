@@ -11,9 +11,9 @@ export const EVENTS = {
 let singleton : any = null;
 
 export async function connectRabbit() {
-  let connection = await rabbit.connect("amqp://guest:guest@localhost:5672", { heartbeat: 1 });
-  //let connection =  await rabbit.connect("amqp://guest:password@localhost:5672"); 
-  //let connection =  await rabbit.connect("amqp://username:password@localhost:5672", { heartbeat: 1 }); 
+  let connection = await rabbit.connect("amqp://username:password@localhost:5672", { heartbeat: 1 });
+  //let connection =  await rabbit.connect("amqp://guest:password@localhost:5672");
+  //let connection =  await rabbit.connect("amqp://guest:guest@localhost:5672", { heartbeat: 1 });
   
   return connection.createChannel();
 }
@@ -44,7 +44,6 @@ export async function consumer(queue: string, callback: (message: { content: str
   console.log("Esperando por demanda");
 
   channel.consume(queue, callback, { noAck: false, exclusive:false });
-  channel.consume(queue, callback);
 
   queueEvent.on(EVENTS.finish, (msg) => {
     console.log('item finalizado', msg, msg.content.toString())

@@ -166,7 +166,12 @@ class CreatePdf {
      * | 6) FINALIZA O PDF                                   |
      * +-----------------------------------------------------+
      */
-    doc.end();
+    // Aguarda o PDF ser gravado em disco antes de considerar o contato concluído
+    await new Promise<void>((resolve, reject) => {
+      pdfStream.on("finish", resolve);
+      pdfStream.on("error", reject);
+      doc.end();
+    });
   }
 
   private parseMediaAttributes(mediaString: string): any {

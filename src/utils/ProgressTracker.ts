@@ -130,14 +130,52 @@ class ProgressTracker extends EventEmitter {
   }
 
   /**
-   * Exibe o progresso no console com barra visual
+   * Exibe o progresso no console com barra visual colorida
    */
   private logProgress(progress: ProgressData): void {
     const barLength = 40;
     const filled = Math.round((progress.percentage / 100) * barLength);
     const empty = barLength - filled;
 
-    const bar = '█'.repeat(filled) + '░'.repeat(empty);
+    // --- Helpers de cor (ANSI truecolor) ---
+    const rgb = (r: number, g: number, b: number) => `\x1b[38;2;${r};${g};${b}m`;
+    const reset = '\x1b[0m';
+    const bold = '\x1b[1m';
+    const dim = '\x1b[2m';
+
+    // Degradê vermelho -> âmbar -> verde ao longo da barra
+    const colorAt = (t: number): string => {
+      const stops: Array<[number, number, number]> = [
+        [255, 76, 96],   // 0%   vermelho/rosa
+        [255, 189, 70],  // 50%  âmbar
+        [46, 213, 115],  // 100% verde
+      ];
+      const clamped = Math.max(0, Math.min(1, t));
+      const seg = clamped * (stops.length - 1);
+      const i = Math.min(Math.floor(seg), stops.length - 2);
+      const f = seg - i;
+      const [r1, g1, b1] = stops[i];
+      const [r2, g2, b2] = stops[i + 1];
+      return rgb(
+        Math.round(r1 + (r2 - r1) * f),
+        Math.round(g1 + (g2 - g1) * f),
+        Math.round(b1 + (b2 - b1) * f),
+      );
+    };
+
+    // Cor sólida em estados finais
+    const forcedColor =
+      progress.status === 'completed' ? rgb(46, 213, 115) :
+      progress.status === 'error'     ? rgb(255, 76, 96)  : null;
+
+    // Monta a barra preenchida com degradê célula a célula
+    let filledBar = '';
+    for (let i = 0; i < filled; i++) {
+      const color = forcedColor ?? colorAt(i / Math.max(1, barLength - 1));
+      filledBar += color + '█';
+    }
+    const emptyBar = dim + rgb(80, 80, 90) + '░'.repeat(empty) + reset;
+    const bar = filledBar + emptyBar;
 
     const statusIcon = {
       pending: '⏳',
@@ -146,8 +184,19 @@ class ProgressTracker extends EventEmitter {
       error: '❌'
     }[progress.status];
 
-    // Monta a linha de progresso simplificada
-    const line = `${statusIcon} [${progress.jobId}] [${bar}] ${progress.percentage}% (${progress.current}/${progress.total})`;
+    const pctColor = forcedColor ?? colorAt(progress.percentage / 100);
+    const pct = `${pctColor}${bold}${progress.percentage}%${reset}`;
+    const counts = `${dim}(${progress.current}/${progress.total})${reset}`;
+    const jobId = `${dim}${rgb(120, 160, 220)}[${progress.jobId}]${reset}`;
+
+    // Tempo restante e mensagem (quando disponíveis)
+    const eta =
+      progress.status === 'processing' && progress.estimatedTimeRemaining
+        ? ` ${dim}⏱ ${this.formatTime(progress.estimatedTimeRemaining)}${reset}`
+        : '';
+    const msg = progress.message ? ` ${dim}· ${progress.message}${reset}` : '';
+
+    const line = `${statusIcon} ${jobId} ${bar} ${pct} ${counts}${eta}${msg}`;
 
     // Limpa a linha atual e escreve na mesma posição
     process.stdout.write('\r\x1b[K' + line);
