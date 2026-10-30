@@ -6,6 +6,7 @@ import Path from "path";
 * de onde parou caso o worker seja interrompido (Ctrl+C, crash, restart).
 *
 * Um arquivo por extração: <dir>/.checkpoints/<companyId>_<dateFrom>_<dateTo>.json
+* Um id por linha, só acrescentado (não regrava o arquivo inteiro a cada contato).
 */
 class Checkpoint {
   private file: string;
@@ -20,11 +21,24 @@ class Checkpoint {
   }
 
   private load(): string[] {
+    let content: string;
     try {
-      return JSON.parse(fs.readFileSync(this.file, "utf8"));
+      content = fs.readFileSync(this.file, "utf8");
     } catch {
       return [];
     }
+
+    // Formato antigo (array JSON): converte para um id por linha para poder só acrescentar
+    if (content.trimStart().startsWith("[")) {
+      let ids: string[] = [];
+      try {
+        ids = JSON.parse(content).map(String);
+      } catch { }
+      fs.writeFileSync(this.file, ids.map((id) => id + "\n").join(""));
+      return ids;
+    }
+
+    return content.split("\n").filter(Boolean);
   }
 
   has(id: string | number): boolean {
@@ -36,8 +50,10 @@ class Checkpoint {
   }
 
   mark(id: string | number) {
-    this.done.add(String(id));
-    fs.writeFileSync(this.file, JSON.stringify([...this.done]));
+    const key = String(id);
+    if (this.done.has(key)) return;
+    this.done.add(key);
+    fs.appendFileSync(this.file, key + "\n");
   }
 
   clear() {

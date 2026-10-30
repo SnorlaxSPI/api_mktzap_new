@@ -2,7 +2,8 @@ import { HistoryMessageApi } from "../api/HistoryMessageApi";
 import { InternalServerError} from "../middlewares/InternalServerError"
 
 class HistoryMessageService {
-  
+  // Mesma instância durante toda a extração: a lista de operadores é buscada uma vez só
+  private getHistoryMessages = new HistoryMessageApi();
 
   /* 
   *  Called HistoryMessageAPI
@@ -28,9 +29,7 @@ class HistoryMessageService {
       throw new InternalServerError("MessageAttendanceID uninformed");
     }
 
-    const getHistoryMessages = new HistoryMessageApi();
-
-    const historyMessages = await getHistoryMessages.execute(token, companyId, contactId);
+    const historyMessages = await this.getHistoryMessages.execute(token, companyId, contactId);
 
     return historyMessages;
   }

@@ -1,7 +1,42 @@
 import axios from "axios";
+import retry from "axios-retry";
 import { InternalServerError } from "../middlewares/InternalServerError";
 
+// Com vários contatos em paralelo a API pode responder 429 (limite de requisições):
+// tenta de novo com espera crescente, assim como em erros de rede e 5xx
+const api = axios.create();
+
+retry(api, {
+  retries: 4,
+  retryDelay: retry.exponentialDelay,
+  retryCondition: (error) =>
+    retry.isNetworkOrIdempotentRequestError(error) || error.response?.status === 429,
+});
+
 class HistoryMessageApi {
+  // Operadores da empresa [user_id => name], buscados uma vez por instância e não a cada contato
+  private usersByCompany = new Map<string, Promise<Map<any, any>>>();
+
+  private users(token: string, companyId: string) {
+    let users = this.usersByCompany.get(companyId);
+
+    if (!users) {
+      users = api
+        .get(`https://api.mktzap.com.br/company/${companyId}/user`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        .then((usersResponse) => new Map(usersResponse.data.map((user: any) => [user.id, user.name])));
+
+      this.usersByCompany.set(companyId, users);
+      // Se falhar, a próxima chamada busca de novo
+      users.catch(() => this.usersByCompany.delete(companyId));
+    }
+
+    return users;
+  }
+
   /*
    * Called HistoryMessage API MKTZap
    *
@@ -13,21 +48,11 @@ class HistoryMessageApi {
     try {
       const cards: any[] = [];
 
-      // 1. Busca os operadores da empresa e cria um map [user_id => name]
-      const usersResponse = await axios.get(
-        `https://api.mktzap.com.br/company/${companyId}/user`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-      const usersMap = new Map(
-        usersResponse.data.map((user: any) => [user.id, user.name])
-      );
+      // 1. Operadores da empresa [user_id => name]
+      const usersMap = await this.users(token, companyId);
 
       // 2. Busca o histórico de mensagens daquele atendimento
-      const historyResponse = await axios.get(
+      const historyResponse = await api.get(
         `https://api.mktzap.com.br/company/${companyId}/history/${message.message_id}/message`,
         {
           headers: {

@@ -8,11 +8,11 @@ class HistoryContactApi {
   /* 
   * Called HistoryContact API MKTZap
   *
-  * @Param token, companyId, dateFrom, dateTo
+  * @Param token, companyId, dateFrom, dateTo, onPage (avisa a cada página lida)
   *
   * @return object
   */
-  async execute(token: string, companyId: string, dateFrom: string, dateTo: string) {
+  async execute(token: string, companyId: string, dateFrom: string, dateTo: string, onPage?: (page: number, found: number) => void) {
     try{
       //variável para receber objeto com message_id
       let contactId: any[] = [];
@@ -39,8 +39,6 @@ class HistoryContactApi {
         
         //itera em cada retorno do history contact
         historyContacts.data.forEach((item: { id: any; name: any; contact_id: any; protocol: any; first_message_at: any} ) => {
-          console.log("Item Req", item)
-
           if(item.name.search(/\\u/g) >= 0 || item.name === "") {
             item.name = item.contact_id.split('_')[2]
           } else {
@@ -57,7 +55,9 @@ class HistoryContactApi {
           //armazena o objeto no array de objetos
           contactId.push(message);
         });
-        
+
+        onPage?.(i, contactId.length);
+
         i++;
       }
       

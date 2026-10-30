@@ -1,7 +1,6 @@
 import { Checkpoint } from "../utils/Checkpoint";
 import { ConvertDateHour } from "../utils/ConvertDateHour";
 import { CreatePdf } from "../utils/CreatePdf";
-import { Directory } from "../utils/Directory";
 import { progressTracker } from "../utils/ProgressTracker";
 import { AccessTokenService } from "./AccessTokenService";
 import { HistoryContactService } from "./HistoryContactService"
@@ -15,6 +14,8 @@ dotenv.config()
 
 const localdir = process.env?.DIR || "./temp/";
 
+// Quantos contatos são processados ao mesmo tempo (API + download de mídias + PDF)
+const concurrency = Math.max(1, Number(process.env?.CONCURRENCY) || 4);
 
 
 /* 
@@ -48,102 +49,77 @@ class HistoryGeneratorService {
       throw new InternalServerError("dateTo incorrect!")
     }
 
+    progressTracker.startJob(jobId, 0, 'Obtendo token de acesso...');
+
+    try {
+      return await this.extract(jobId, companyId, clientKey, dateFrom, dateTo);
+    } catch (err: any) {
+      progressTracker.errorJob(jobId, err?.message || String(err));
+      throw err;
+    }
+  }
+
+  private async extract(jobId: string, companyId: string, clientKey: string, dateFrom: string, dateTo: string) {
+
     const accessTokenService = new AccessTokenService();
 
-    progressTracker.startJob(jobId, 100, 'Obtendo token de acesso...');
-
     const token = await accessTokenService.execute(companyId, clientKey);
-    console.log(token);
-
 
     if (!token) {
-      progressTracker.errorJob(jobId, 'Falha ao gerar token');
       throw new InternalServerError("Failed generate token");
     }
 
-    progressTracker.updateProgress(jobId, 5, 'Token obtido. Buscando contatos...');
+    const accessToken = token.accessToken;
+
+    progressTracker.updateMessage(jobId, 'Token obtido. Buscando contatos...');
 
     const historyContactService = new HistoryContactService();
 
-    const historyContact = await historyContactService.execute(await token.accessToken, companyId, dateFrom, dateTo);
+    const historyContact = await historyContactService.execute(accessToken, companyId, dateFrom, dateTo, (page, found) => {
+      progressTracker.updateMessage(jobId, `Buscando contatos... página ${page} (${found.toLocaleString('pt-BR')} encontrados)`);
+    });
 
-    const totalContacts = historyContact.length;
+    // Um mesmo contato repetido entre páginas seria processado duas vezes ao mesmo tempo
+    const contacts = [...new Map(historyContact.map((contact) => [String(contact.message_id), contact])).values()];
 
     // Retoma de onde parou: contatos já concluídos numa execução anterior são pulados
     const checkpoint = new Checkpoint(localdir, companyId, dateFrom, dateTo);
     const failuresFile = `${localdir}falhas_${companyId}_${dateFrom}_${dateTo}.log`;
-    const resumed = historyContact.filter((contact) => checkpoint.has(contact.message_id)).length;
+    const pending = contacts.filter((contact) => !checkpoint.has(contact.message_id));
+    const totalContacts = contacts.length;
 
-    progressTracker.updateProgress(
-      jobId,
-      10,
-      resumed > 0
-        ? `${totalContacts} contatos encontrados. Retomando a partir do ${resumed + 1}...`
-        : `${totalContacts} contatos encontrados. Iniciando processamento...`
-    );
-
-    // Atualiza o total para refletir a quantidade real de trabalho
-    const progress = progressTracker.getProgress(jobId);
-    if (progress) {
-      progress.total = totalContacts;
-      progress.current = resumed;
-    }
+    progressTracker.setTotal(jobId, totalContacts, totalContacts - pending.length);
 
     const historyMessageService = new HistoryMessageService()
-
-    const dir = new Directory();
 
     const convert = new ConvertDateHour();
 
     const createPdf = new CreatePdf();
 
-    let processedContacts = resumed;
+    // Gera os PDFs de um contato; retorna false se algum falhou (fica registrado no log de falhas)
+    const processContact = async (messageAttendanceId: any) => {
+      const historyMessage = await historyMessageService.execute(accessToken, companyId, messageAttendanceId);
 
-    for (const messageAttendanceId of historyContact) {
+      let ok = true;
 
-      if (checkpoint.has(messageAttendanceId.message_id)) continue;
-
-      const historyMessage = await historyMessageService.execute(await token.accessToken, companyId, messageAttendanceId);
-
-      // Usar for...of ao invés de forEach para await funcionar corretamente
       for (const item of historyMessage) {
 
-        let year = convert.dateYear(item.firstMessageAt);
-        let month = convert.dateMonth(item.firstMessageAt);
-        let day = convert.dateDay(item.firstMessageAt);
+        const year = convert.dateYear(item.firstMessageAt);
+        const month = convert.dateMonth(item.firstMessageAt);
+        const day = convert.dateDay(item.firstMessageAt);
 
-        if (await dir.verifyDir(`${localdir}`) === false) {
-          dir.createDir(`${localdir}`);
-        }
-        if (await dir.verifyDir(`${localdir}${year}`) === false) {
-          dir.createDir(`${localdir}${year}`);
-        }
-
-        if (await dir.verifyDir(`${localdir}${year}/${month}`) === false) {
-          dir.createDir(`${localdir}${year}/${month}`);
-        }
-
-        if (await dir.verifyDir(`${localdir}${year}/${month}/${day}`) === false) {
-          dir.createDir(`${localdir}${year}/${month}/${day}`);
-        }
-
-        if (await dir.verifyDir(`${localdir}${year}/${month}/${day}/${item.protocol}`) === false) {
-          dir.createDir(`${localdir}${year}/${month}/${day}/${item.protocol}`);
-        }
-
-        let directory = `${localdir}${year}/${month}/${day}/${item.protocol}`;
-        if (item.contactId.slice(0, 2) === "em") {
-          console.log("Card", item);
-        }
+        const directory = `${localdir}${year}/${month}/${day}/${item.protocol}`;
 
         // Erro ao montar o PDF é problema do conteúdo desse atendimento: registra e segue,
         // senão a mensagem volta para a fila e trava a extração em loop no mesmo contato.
         // Erros da API (token, rede) continuam subindo e a extração é retomada pelo checkpoint.
         try {
+          await fs.promises.mkdir(directory, { recursive: true });
           await createPdf.execute(item, directory);
         } catch (err: any) {
+          ok = false;
           const error = err?.message || String(err);
-          console.error(`\n❌ Falha ao gerar PDF do protocolo ${item.protocol}: ${error}`);
+          progressTracker.log(`❌ Falha ao gerar PDF do protocolo ${item.protocol}: ${error}`);
           fs.appendFileSync(
             failuresFile,
             JSON.stringify({ at: new Date().toISOString(), protocol: item.protocol, contactId: item.contactId, directory, error }) + "\n"
@@ -153,24 +129,43 @@ class HistoryGeneratorService {
 
       checkpoint.mark(messageAttendanceId.message_id);
 
-      processedContacts++;
-      progressTracker.updateProgress(
-        jobId,
-        processedContacts,
-        `Processando contato ${processedContacts}/${totalContacts}`
-      );
+      return ok;
+    };
+
+    // Processa até `concurrency` contatos ao mesmo tempo. Se um der erro de API, para de pegar
+    // novos, espera os que já estão em andamento terminarem (e entrarem no checkpoint) e sobe o erro.
+    let next = 0;
+    let failure: any = null;
+
+    const worker = async () => {
+      while (!failure && next < pending.length) {
+        const messageAttendanceId = pending[next++];
+        progressTracker.cardStarted(jobId);
+        try {
+          const ok = await processContact(messageAttendanceId);
+          progressTracker.cardFinished(jobId, ok);
+        } catch (err) {
+          failure = failure || err;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+
+    if (failure) {
+      throw failure;
     }
 
     checkpoint.clear();
 
     if (fs.existsSync(failuresFile)) {
-      console.log(`\n⚠️ Alguns atendimentos falharam ao gerar PDF. Veja ${failuresFile}`);
+      progressTracker.log(`⚠️ Alguns atendimentos falharam ao gerar PDF. Veja ${failuresFile}`);
     }
 
     progressTracker.completeJob(jobId, 'Extração finalizada com sucesso!');
     console.log("Finalizado Processamento");
 
-    return { jobId, totalContacts: processedContacts };
+    return { jobId, totalContacts };
   }
 }
 

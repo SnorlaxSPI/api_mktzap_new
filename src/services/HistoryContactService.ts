@@ -6,11 +6,11 @@ class HistoryContactService {
   /* 
   * Called HistoryContactAPI
   *
-  * @Param token, companyId, dateFrom, dateTo
+  * @Param token, companyId, dateFrom, dateTo, onPage (avisa a cada página lida)
   *
   * @return object
   */
-  async execute(token: string, companyId: string, dateFrom: string, dateTo: string) {
+  async execute(token: string, companyId: string, dateFrom: string, dateTo: string, onPage?: (page: number, found: number) => void) {
   
     if(!token) {
       throw new InternalServerError("Token uninformed")
@@ -31,7 +31,7 @@ class HistoryContactService {
     
     const getHistoryContact = new HistoryContactApi();
 
-    const historyContact = getHistoryContact.execute(token, companyId, dateFrom, dateTo);
+    const historyContact = getHistoryContact.execute(token, companyId, dateFrom, dateTo, onPage);
 
     return historyContact;
   }
